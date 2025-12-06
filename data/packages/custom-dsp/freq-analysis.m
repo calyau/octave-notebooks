@@ -1,5 +1,17 @@
 % Find harmonics from a spectrum
-function [peak_freqs, peak_amps] = find_harmonics(signal, fs, window_size)
+function [freqs, amps, metadata] = analyze_static_spectrum(signal, fs, window_size)
+    % Analyze a single spectral snapshot
+    %
+    % Args:
+    %   signal: audio signal (mono)
+    %   fs: sample rate in Hz
+    %   window_size: FFT window size (default 4096)
+    %
+    % Returns:
+    %   freqs: array of peak frequencies in Hz
+    %   amps: array of peak amplitudes in dBFS
+    %   metadata: struct with analysis parameters
+
     if nargin < 3
         window_size = 4096;
     end
@@ -26,7 +38,7 @@ function [peak_freqs, peak_amps] = find_harmonics(signal, fs, window_size)
     spectrum_shifted = spectrum_db - min_db;
 
     % Frequency axis
-    freqs = (0:window_size/2-1)' * fs / window_size;
+    freqs_full = (0:window_size/2-1)' * fs / window_size;
 
     % Calculate peak threshold (handle edge cases)
     peak_threshold = max(spectrum_shifted) - 42;
@@ -39,12 +51,25 @@ function [peak_freqs, peak_amps] = find_harmonics(signal, fs, window_size)
                                               'MinPeakDistance', 10);
 
     % Return actual dB values (not shifted)
-    peak_freqs = freqs(locs);
-    peak_amps = spectrum_db(locs);
+    freqs = freqs_full(locs);
+    amps = spectrum_db(locs);
 
     % Sort by frequency
-    [peak_freqs, idx] = sort(peak_freqs);
-    peak_amps = peak_amps(idx);
+    [freqs, idx] = sort(freqs);
+    amps = amps(idx);
+
+    % Build metadata struct
+    metadata.num_partials = length(freqs);
+    metadata.sample_rate = fs;
+    metadata.window_size = window_size;
+    metadata.time_stamp = 0.0;  % Single snapshot at t=0
+
+    % Set fundamental automatically (first frequency)
+    if ~isempty(freqs)
+        metadata.fundamental = freqs(1);
+    else
+        metadata.fundamental = 0;  % No partials found
+    end
 end
 
 % Convert frequency to MIDI note name (e.g., "A4", "C#5")
@@ -134,23 +159,27 @@ function print_harmonics(peak_freqs, peak_amps)
     fundamental = peak_freqs(1);
 
     % Print header
-    printf('%-12s %-10s %-13s %-12s %-10s %-8s\n', ...
-           'Frequency', 'Closest', 'Partial', 'Amplitude', 'Velocity', 'Dynamic');
-    printf('%-12s %-10s %-13s %-12s %-10s %-8s\n', ...
-           '(Hz)', 'Note', 'Ratio', '(dBFS)', '(MIDI)', '');
-    printf('%s\n', repmat('-', 1, 75));
+    printf('%-12s %-10s %-10s %-13s %-12s %-10s %-8s\n', ...
+           'Frequency', 'Closest', 'MIDI', 'Partial', 'Amplitude', 'Velocity', 'Dynamic');
+    printf('%-12s %-10s %-10s %-13s %-12s %-10s %-8s\n', ...
+           '(Hz)', 'Note', 'Note', 'Ratio', '(dBFS)', '(MIDI)', '');
+    printf('%s\n', repmat('-', 1, 85));
 
     % Print each harmonic
     for i = 1:length(peak_freqs)
         freq = peak_freqs(i);
         amp = peak_amps(i);
         ratio = freq / fundamental;
-        note = freq_to_midi_note(freq);
+        note_name = freq_to_midi_note(freq);
+
+        % Calculate MIDI note number
+        midi_note = round(69 + 12 * log2(freq / 440));
+
         velocity = amplitude_to_midi(amp);
         dynamic = midi_to_dynamic(velocity);
 
-        printf('%-12.1f %-10s %-13.2f %-12.1f %-10d %-8s\n', ...
-               freq, note, ratio, amp, velocity, dynamic);
+        printf('%-12.1f %-10s %-10d %-13.2f %-12.1f %-10d %-8s\n', ...
+               freq, note_name, midi_note, ratio, amp, velocity, dynamic);
     end
 end
 

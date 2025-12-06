@@ -1,37 +1,6 @@
 % time-varying-analysis.m
 % Functions for time-varying spectral analysis
 
-function [freqs, amps] = analyze_static_spectrum(audio_file, window_size)
-    % Analyze a single spectral snapshot from an audio file
-    %
-    % Parameters:
-    %   audio_file - path to .wav file (string)
-    %   window_size - FFT window size (optional, default 4096)
-    %
-    % Returns:
-    %   freqs - array of peak frequencies in Hz
-    %   amps - array of peak amplitudes in dBFS
-
-    if nargin < 2
-        window_size = 4096;
-    end
-
-    [y, fs] = audioread(audio_file);
-
-    % Convert to mono
-    if size(y, 2) > 1
-        y = y(:, 1);
-    end
-
-    % High-pass filter at 80 Hz
-    [b, a] = butter(4, 80/(fs/2), 'high');
-    y = filter(b, a, y);
-
-    % Use existing find_harmonics function
-    [freqs, amps] = find_harmonics(y, fs, window_size);
-end
-
-
 function [times, freqs_matrix, amps_matrix, metadata] = analyze_spectral_evolution(audio_file, window_size, hop_size, min_amplitude)
     % Analyze time-varying spectrum across an audio file
     %
@@ -130,6 +99,20 @@ function [times, freqs_matrix, amps_matrix, metadata] = analyze_spectral_evoluti
     metadata.sample_rate = fs;
     metadata.window_size = window_size;
     metadata.hop_size = hop_size;
+
+    % Set fundamental automatically (first frequency from first frame)
+    if actual_frames > 0 && size(freqs_matrix, 2) > 0
+        % Find first non-zero frequency in first frame
+        first_frame_freqs = freqs_matrix(1, :);
+        first_nonzero = first_frame_freqs(first_frame_freqs > 0);
+        if ~isempty(first_nonzero)
+            metadata.fundamental = first_nonzero(1);
+        else
+            metadata.fundamental = 0;
+        end
+    else
+        metadata.fundamental = 0;
+    end
 end
 
 
