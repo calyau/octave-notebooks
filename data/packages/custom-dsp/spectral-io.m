@@ -45,9 +45,15 @@ function save_static_spectrum(filename, freqs, amps, metadata)
         time_stamp = 0.0;
     end
 
+    % Format signature for mat2sdif tool detection
+    octave_dsp_format = 'spectral_static';
+    octave_dsp_version = 1.0;
+
     % Save to .mat file (MATLAB v5/v6 compatible)
-    save('-v6', filename, 'freqs', 'amps', 'num_partials', 'fundamental', ...
-         'sample_rate', 'time_stamp', 'instrument_id', 'midi_note');
+    save('-v6', filename, 'freqs', 'amps', 'num_partials', ...
+         'fundamental', 'sample_rate', 'time_stamp', ...
+         'instrument_id', 'midi_note', ...
+         'octave_dsp_format', 'octave_dsp_version');
 
     % Print confirmation
     printf('Saved static spectrum: %s (%d partials)\n', filename, num_partials);
@@ -101,10 +107,16 @@ function save_spectral_evolution(filename, times, freqs_matrix, amps_matrix, met
     freqs = freqs_matrix;
     amps = amps_matrix;
 
+    % Format signature for mat2sdif tool detection
+    octave_dsp_format = 'spectral_evolution';
+    octave_dsp_version = 1.0;
+
     % Save to .mat file (MATLAB v5/v6 compatible)
-    save('-v6', filename, 'times', 'freqs', 'amps', 'num_frames', ...
-         'num_partials_per_frame', 'fundamental', 'sample_rate', ...
-         'window_size', 'hop_size', 'instrument_id', 'midi_note');
+    save('-v6', filename, 'times', 'freqs', 'amps', ...
+         'num_frames', 'num_partials_per_frame', ...
+         'fundamental', 'sample_rate', 'window_size', 'hop_size', ...
+         'instrument_id', 'midi_note', ...
+         'octave_dsp_format', 'octave_dsp_version');
 
     % Print confirmation
     printf('Saved spectral evolution: %s (%d frames, %.2f-%.2f sec)\n', ...
