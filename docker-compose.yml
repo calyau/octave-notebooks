@@ -1,0 +1,11 @@
+services:
+  octave-jupyter:
+    build: .
+    image: octave-jupyter-dsp
+    container_name: octave-jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      # Your notebooks and audio files
+      - ./data:/notebooks
+    restart: unless-stopped
