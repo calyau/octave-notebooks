@@ -386,7 +386,6 @@ function plot_partial_amp_trajectories(times, amps_matrix, num_partials, title_s
     end
 end
 
-
 function plot_single_partial(times, amps_matrix, partial_idx, color, time_range, amp_range)
     % Helper function to plot a single partial
 
@@ -484,7 +483,29 @@ function plot_harmonic_ratios(times, freqs_matrix, max_partial, title_str, time_
         end
     end
 
+    % Set ranges
+    if ~isempty(time_range)
+        xlim(time_range);
+    end
+
+    if ~isempty(ratio_range)
+        ylim(ratio_range);
+    else
+        ylim([1.5 max_partial + 0.5]);
+    end
+
+    current_ylim = ylim;
+    current_xlim = xlim;
+
+    % Add reference lines for perfect harmonics (using plot instead of yline)
+    for i = 2:max_partial
+        if i >= current_ylim(1) && i <= current_ylim(2)
+            plot(current_xlim, [i i], '--', 'Color', [0.5 0.5 0.5], 'LineWidth', 0.5);
+        end
+    end
+
     hold off;
+
     xlabel('Time (s)');
     ylabel('Ratio to Fundamental');
     if ~isempty(title_str)
@@ -493,28 +514,10 @@ function plot_harmonic_ratios(times, freqs_matrix, max_partial, title_str, time_
         title('Harmonic Ratio Evolution (Inharmonicity)');
     end
     if ~isempty(legend_labels)
-        legend(legend_labels, 'location', 'best');
-    end
-    if ~isempty(time_range)
-        xlim(time_range);
-    end
-
-    % Set y-range (either custom or auto with reference lines)
-    if ~isempty(ratio_range)
-        ylim(ratio_range);
-    else
-        ylim([1.5 max_partial + 0.5]);
+        legend(legend_labels, 'location', 'eastoutside');  % Legend outside on the right
     end
 
     grid on;
-
-    % Add reference lines for perfect harmonics
-    current_ylim = ylim;
-    for i = 2:max_partial
-        if i >= current_ylim(1) && i <= current_ylim(2)
-            yline(i, '--', 'Color', [0.5 0.5 0.5], 'Alpha', 0.3);
-        end
-    end
 end
 
 function plot_spectral_centroid(times, freqs_matrix, amps_matrix, title_str, time_range, centroid_range)
@@ -580,19 +583,19 @@ function plot_spectral_centroid(times, freqs_matrix, amps_matrix, title_str, tim
 end
 
 
-function plot_spectral_richness(times, amps_matrix, threshold, title_str, time_range, richness_range)
-    % Plot number of active partials over time
+function plot_spectral_richness(times, amps_matrix, thresholds, title_str, time_range, richness_range)
+    % Plot number of active partials over time with multiple threshold layers
     %
     % Args:
     %   times: time vector (seconds)
     %   amps_matrix: 2D array [frames × partials] of amplitudes (dBFS)
-    %   threshold: minimum dB to count as "active" (default -60)
+    %   thresholds: array of dB thresholds (default [-60, -50, -40, -30, -20])
     %   title_str: optional title prefix (default '')
     %   time_range: [min_time, max_time] to display (default: auto)
     %   richness_range: [min_count, max_count] of partials (default: auto)
 
-    if nargin < 3
-        threshold = -60;
+    if nargin < 3 || isempty(thresholds)
+        thresholds = [-60, -50, -40, -30, -20];
     end
     if nargin < 4
         title_str = '';
@@ -604,11 +607,46 @@ function plot_spectral_richness(times, amps_matrix, threshold, title_str, time_r
         richness_range = [];
     end
 
-    % Count active partials per frame
-    active_partials = sum(amps_matrix > threshold, 2);
+    % Ensure thresholds is a vector
+    thresholds = thresholds(:)';  % Make it a row vector
+
+    % Sort thresholds in ASCENDING order (lowest dB first = most partials)
+    thresholds = sort(thresholds, 'ascend');
+
+    num_thresholds = length(thresholds);
+
+    % Create rainbow colors
+    colors = jet(num_thresholds);
+
+    % Calculate active partials for each threshold
+    active_partials_all = zeros(length(times), num_thresholds);
+    for i = 1:num_thresholds
+        active_partials_all(:, i) = sum(amps_matrix > thresholds(i), 2);
+    end
+
+    % Find overall max for y-axis
+    overall_max = max(active_partials_all(:));
 
     figure;
-    plot(times, active_partials, 'LineWidth', 2, 'Color', [0.8 0.2 0.2]);
+    hold on;
+
+    % Plot areas from LOWEST threshold to HIGHEST (most partials to least)
+    % This draws the largest area first, then smaller areas on top
+    legend_labels = {};
+    for i = 1:num_thresholds
+        active_partials = active_partials_all(:, i);
+
+        % Draw filled area
+        area(times, active_partials, ...
+             'FaceColor', colors(i,:), ...
+             'FaceAlpha', 0.6, ...
+             'EdgeColor', 'none');
+
+        legend_labels{end+1} = sprintf('> %.0f dBFS', thresholds(i));
+    end
+
+    hold off;
+
     xlabel('Time (s)');
     ylabel('Number of Active Partials');
     if ~isempty(title_str)
@@ -622,16 +660,14 @@ function plot_spectral_richness(times, amps_matrix, threshold, title_str, time_r
     if ~isempty(richness_range)
         ylim(richness_range);
     else
-        ylim([0 max(active_partials) + 2]);
+        ylim([0 overall_max + 2]);
     end
+
+    % Add legend on the right
+    legend(legend_labels, 'location', 'eastoutside');
+
     grid on;
-
-    % Add shading
-    hold on;
-    area(times, active_partials, 'FaceColor', [0.8 0.2 0.2], 'FaceAlpha', 0.2, 'EdgeColor', 'none');
-    hold off;
 end
-
 
 function spectral_analysis_report(times, freqs_matrix, amps_matrix, title_str, num_partials)
     % Generate a comprehensive spectral analysis report with all plots
