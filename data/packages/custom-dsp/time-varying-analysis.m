@@ -491,13 +491,16 @@ function plot_harmonic_ratios(times, freqs_matrix, max_partial, title_str, time_
 
     xlabel('Time (s)');
     ylabel('Ratio to Fundamental');
+
+    % Multi-line title using newline
     if ~isempty(title_str)
-        title([title_str ' - Harmonic Ratio Evolution (Inharmonicity)']);
+        title(sprintf('%s\nHarmonic Ratio Evolution (Inharmonicity)', title_str));
     else
-        title('Harmonic Ratio Evolution (Inharmonicity)');
+        title(sprintf('Harmonic Ratio Evolution\n(Inharmonicity)'));
     end
+
     if ~isempty(legend_labels)
-        legend(legend_labels, 'location', 'eastoutside');  % Legend outside on the right
+        legend(legend_labels, 'location', 'eastoutside');
     end
 
     grid on;
