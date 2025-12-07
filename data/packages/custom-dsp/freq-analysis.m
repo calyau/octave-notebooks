@@ -67,8 +67,10 @@ function [freqs, amps, metadata] = analyze_static_spectrum(signal, fs, window_si
     % Set fundamental automatically (first frequency)
     if ~isempty(freqs)
         metadata.fundamental = freqs(1);
+        metadata.midi_note = freq_to_midi_note(metadata.fundamental);
     else
         metadata.fundamental = 0;  % No partials found
+        metadata.midi_note = 'N/A';
     end
 end
 
@@ -246,4 +248,4 @@ function plot_spectrogram(signal, fs, title_str, freq_min, freq_max)
     ylabel(c, 'Magnitude (dBFS)');
 end
 
-printf('Helper functions loaded with MIDI extensions!\n');
+printf('Static frequency analysis functions loaded!\n');

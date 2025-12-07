@@ -40,8 +40,8 @@ function [times, freqs_matrix, amps_matrix, metadata] = analyze_spectral_evoluti
         y = y(:, 1);
     end
 
-    % High-pass filter at 80 Hz
-    [b, a] = butter(4, 80/(fs/2), 'high');
+    % High-pass filter at 30 Hz (preserves low fundamentals, removes DC/subsonic)
+    [b, a] = butter(4, 30/(fs/2), 'high');
     y = filter(b, a, y);
 
     % Calculate frame parameters
@@ -100,18 +100,12 @@ function [times, freqs_matrix, amps_matrix, metadata] = analyze_spectral_evoluti
     metadata.window_size = window_size;
     metadata.hop_size = hop_size;
 
-    % Set fundamental automatically (first frequency from first frame)
-    if actual_frames > 0 && size(freqs_matrix, 2) > 0
-        % Find first non-zero frequency in first frame
-        first_frame_freqs = freqs_matrix(1, :);
-        first_nonzero = first_frame_freqs(first_frame_freqs > 0);
-        if ~isempty(first_nonzero)
-            metadata.fundamental = first_nonzero(1);
-        else
-            metadata.fundamental = 0;
-        end
+    % Detect fundamental using harmonic analysis
+    metadata.fundamental = detect_fundamental(freqs_matrix, amps_matrix);
+    if metadata.fundamental > 0
+        metadata.midi_note = freq_to_midi_note(metadata.fundamental);
     else
-        metadata.fundamental = 0;
+        metadata.midi_note = 'N/A';
     end
 end
 
@@ -191,6 +185,87 @@ function [peak_freqs, peak_amps] = find_harmonics_frame(frame, fs, window_size, 
 
     %printf('  [DEBUG] Returning %d partials\n', length(peak_freqs));
 end
+
+
+function f0 = detect_fundamental(freqs_matrix, amps_matrix)
+    % Detect fundamental frequency using harmonic analysis
+    %
+    % Algorithm:
+    % 1. Skip first ~10% of frames (attack transient)
+    % 2. Collect all detected peaks from stable frames
+    % 3. For each candidate f0, score based on:
+    %    - How many harmonics (n*f0) are present within tolerance
+    %    - Weighted by amplitude of matching peaks
+    % 4. Return the f0 with highest score
+
+    num_frames = size(freqs_matrix, 1);
+    if num_frames == 0
+        f0 = 0;
+        return;
+    end
+
+    % Use frames from stable portion (skip attack, use early-mid sustain)
+    start_frame = max(1, floor(num_frames * 0.1));
+    end_frame = min(num_frames, floor(num_frames * 0.5));
+    if end_frame <= start_frame
+        end_frame = num_frames;
+    end
+
+    % Collect all frequencies from stable frames
+    stable_freqs = freqs_matrix(start_frame:end_frame, :);
+    stable_amps = amps_matrix(start_frame:end_frame, :);
+    all_freqs = stable_freqs(stable_freqs > 0);
+    all_amps = stable_amps(stable_freqs > 0);
+
+    if isempty(all_freqs)
+        f0 = 0;
+        return;
+    end
+
+    % Make sure they're column vectors
+    all_freqs = all_freqs(:);
+    all_amps = all_amps(:);
+
+    % Get unique candidate fundamentals (all peaks are potential f0s)
+    % Also consider sub-harmonics (peak/2, peak/3) as candidates
+    candidates = unique([all_freqs; all_freqs/2; all_freqs/3]);
+    candidates = candidates(candidates > 20 & candidates < 2000);  % Reasonable f0 range
+
+    if isempty(candidates)
+        f0 = 0;
+        return;
+    end
+
+    best_score = 0;
+    best_f0 = 0;
+
+    for i = 1:length(candidates)
+        f0_candidate = candidates(i);
+        score = 0;
+
+        % Check harmonics 1 through 10
+        for harmonic = 1:10
+            expected_freq = f0_candidate * harmonic;
+            tolerance = expected_freq * 0.03;  % 3% tolerance
+
+            % Find peaks near this expected harmonic
+            matches = abs(all_freqs - expected_freq) < tolerance;
+            if any(matches)
+                % Add amplitude-weighted score (convert dB to linear)
+                matching_amps = all_amps(matches);
+                score = score + sum(10.^(matching_amps/20));
+            end
+        end
+
+        if score > best_score
+            best_score = score;
+            best_f0 = f0_candidate;
+        end
+    end
+
+    f0 = best_f0;
+end
+
 
 % ============================================================================
 % VISUALIZATION FUNCTIONS FOR TIME-VARYING SPECTRAL ANALYSIS
