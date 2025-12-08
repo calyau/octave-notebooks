@@ -2,57 +2,71 @@
 % RHYTHMIC ANALYSIS FUNCTIONS FOR AMPLITUDE ENVELOPES
 % ============================================================================
 
-function smoothed = smooth_envelope(envelope, window_size)
+function smoothed = smooth_envelope(envelope, options)
     % Smooth amplitude envelope using moving average
     %
-    % Args:
-    %   envelope: amplitude values
-    %   window_size: number of samples to average
+    % Parameters:
+    %   envelope - amplitude values
+    %   options - optional struct with:
+    %     .sample_window - number of samples to average (default 5)
     %
     % Returns:
-    %   smoothed: smoothed envelope
+    %   smoothed - smoothed envelope
 
+    % Handle default parameters
     if nargin < 2
-        window_size = 5;
+        options = struct();
+    end
+    if ~isfield(options, 'sample_window')
+        options.sample_window = 5;
     end
 
     % Ensure envelope is a column vector
     envelope = envelope(:);
 
     % Ensure we have enough data
-    if length(envelope) < window_size
+    if length(envelope) < options.sample_window
         smoothed = envelope;
         return;
     end
 
     % Simple moving average using convolution
-    kernel = ones(window_size, 1) / window_size;  % Make kernel same orientation
+    kernel = ones(options.sample_window, 1) / options.sample_window;
     smoothed = conv(envelope, kernel, 'same');
 end
 
 
-function [peak_times, peak_values] = find_amplitude_peaks(times, amps, min_peak_height, min_peak_distance)
+function [peak_times, peak_values] = find_amplitude_peaks(times, amps, options)
     % Find peaks in amplitude trajectory
     %
-    % Args:
-    %   times: time vector (seconds)
-    %   amps: amplitude values (dBFS)
-    %   min_peak_height: minimum amplitude for peak (dBFS)
-    %   min_peak_distance: minimum samples between peaks
+    % Parameters:
+    %   times - time vector (seconds)
+    %   amps - amplitude values (dBFS)
+    %   options - optional struct with:
+    %     .min_peak_distance - minimum samples between peaks (default 10)
+    %     .min_peak_height - minimum amplitude for peak in dBFS (default -40)
+    %     .threshold_db - minimum dB to consider valid (default -60)
     %
     % Returns:
-    %   peak_times: time points of peaks
-    %   peak_values: amplitude values at peaks
+    %   peak_times - time points of peaks
+    %   peak_values - amplitude values at peaks
 
+    % Handle default parameters
     if nargin < 3
-        min_peak_height = -40;
+        options = struct();
     end
-    if nargin < 4
-        min_peak_distance = 10;
+    if ~isfield(options, 'min_peak_distance')
+        options.min_peak_distance = 10;
+    end
+    if ~isfield(options, 'min_peak_height')
+        options.min_peak_height = -40;
+    end
+    if ~isfield(options, 'threshold_db')
+        options.threshold_db = -60;
     end
 
     % Only consider valid (non-zero) amplitudes
-    valid = amps > -60;
+    valid = amps > options.threshold_db;
 
     if sum(valid) < 2
         peak_times = [];
@@ -66,7 +80,7 @@ function [peak_times, peak_values] = find_amplitude_peaks(times, amps, min_peak_
     % Shift amplitudes to be positive for findpeaks
     min_amp = min(valid_amps);
     shifted_amps = valid_amps - min_amp;
-    shifted_threshold = min_peak_height - min_amp;
+    shifted_threshold = options.min_peak_height - min_amp;
 
     % Make sure threshold is non-negative
     if shifted_threshold < 0
@@ -75,7 +89,7 @@ function [peak_times, peak_values] = find_amplitude_peaks(times, amps, min_peak_
 
     % Find peaks
     [peaks, locs] = findpeaks(shifted_amps, 'MinPeakHeight', shifted_threshold, ...
-                                            'MinPeakDistance', min_peak_distance);
+                                            'MinPeakDistance', options.min_peak_distance);
 
     if isempty(locs)
         peak_times = [];
@@ -89,16 +103,38 @@ function [peak_times, peak_values] = find_amplitude_peaks(times, amps, min_peak_
 end
 
 
-function [rate_of_change, inflection_times] = analyze_envelope_dynamics(times, amps)
+function [rate_of_change, inflection_times] = analyze_envelope_dynamics(times, amps, options)
     % Analyze rate of change in amplitude envelope
     %
-    % Args:
-    %   times: time vector (seconds)
-    %   amps: amplitude values (dBFS)
+    % Parameters:
+    %   times - time vector (seconds)
+    %   amps - amplitude values (dBFS)
+    %   options - optional struct with:
+    %     .min_inflection_spacing - minimum seconds between inflections (default 0.1)
+    %     .min_rate_threshold - minimum rate threshold in dB/s (default 5)
+    %     .smooth_window - smoothing window for rate of change (default 10)
+    %     .threshold_multiplier - fraction of max rate for threshold (default 0.1)
     %
     % Returns:
-    %   rate_of_change: dB/second change rate
-    %   inflection_times: times where derivative changes sign
+    %   rate_of_change - dB/second change rate
+    %   inflection_times - times where derivative changes sign
+
+    % Handle default parameters
+    if nargin < 3
+        options = struct();
+    end
+    if ~isfield(options, 'min_inflection_spacing')
+        options.min_inflection_spacing = 0.1;
+    end
+    if ~isfield(options, 'min_rate_threshold')
+        options.min_rate_threshold = 5;
+    end
+    if ~isfield(options, 'smooth_window')
+        options.smooth_window = 10;
+    end
+    if ~isfield(options, 'threshold_multiplier')
+        options.threshold_multiplier = 0.1;
+    end
 
     if length(times) < 2
         rate_of_change = [];
@@ -112,8 +148,9 @@ function [rate_of_change, inflection_times] = analyze_envelope_dynamics(times, a
     rate_of_change = damp ./ dt;
 
     % Smooth the rate of change to reduce noise
-    if length(rate_of_change) > 10
-        rate_of_change = smooth_envelope(rate_of_change, 10);
+    if length(rate_of_change) > options.smooth_window
+        smooth_opts.window_size = options.smooth_window;
+        rate_of_change = smooth_envelope(rate_of_change, smooth_opts);
     end
 
     if length(rate_of_change) < 2
@@ -125,9 +162,9 @@ function [rate_of_change, inflection_times] = analyze_envelope_dynamics(times, a
     % Use a threshold to avoid detecting tiny fluctuations
 
     % Calculate a dynamic threshold based on the data
-    threshold = max(abs(rate_of_change)) * 0.1;  % 10% of max rate
-    if threshold < 5
-        threshold = 5;  % Minimum threshold of 5 dB/s
+    threshold = max(abs(rate_of_change)) * options.threshold_multiplier;
+    if threshold < options.min_rate_threshold
+        threshold = options.min_rate_threshold;
     end
 
     % Only consider significant changes
@@ -146,10 +183,9 @@ function [rate_of_change, inflection_times] = analyze_envelope_dynamics(times, a
 
         % Further filter: ensure inflections are spaced apart
         if length(time_indices) > 1
-            min_spacing = 0.1;  % At least 0.1 seconds between inflections
             filtered_indices = [time_indices(1)];
             for i = 2:length(time_indices)
-                if times(time_indices(i)) - times(filtered_indices(end)) > min_spacing
+                if times(time_indices(i)) - times(filtered_indices(end)) > options.min_inflection_spacing
                     filtered_indices = [filtered_indices; time_indices(i)];
                 end
             end
@@ -163,22 +199,44 @@ function [rate_of_change, inflection_times] = analyze_envelope_dynamics(times, a
 end
 
 
-function [period, confidence] = find_amplitude_periodicity(amps, fs_analysis)
+function [period, confidence] = find_amplitude_periodicity(amps, fs_analysis, options)
     % Detect periodic patterns in amplitude using autocorrelation
     %
-    % Args:
-    %   amps: amplitude values (dBFS)
-    %   fs_analysis: effective sample rate of amplitude data (Hz)
+    % Parameters:
+    %   amps - amplitude values (dBFS)
+    %   fs_analysis - effective sample rate of amplitude data (Hz)
+    %   options - optional struct with:
+    %     .min_peak_distance - min distance between ACF peaks (default 5)
+    %     .min_samples - minimum valid samples required (default 10)
+    %     .peak_threshold_mult - multiplier for peak threshold (default 0.3)
+    %     .threshold_db - minimum dB to consider valid (default -60)
     %
     % Returns:
-    %   period: detected period in seconds (0 if none)
-    %   confidence: confidence in detection (0-1)
+    %   period - detected period in seconds (0 if none)
+    %   confidence - confidence in detection (0-1)
+
+    % Handle default parameters
+    if nargin < 3
+        options = struct();
+    end
+    if ~isfield(options, 'min_peak_distance')
+        options.min_peak_distance = 5;
+    end
+    if ~isfield(options, 'min_samples')
+        options.min_samples = 10;
+    end
+    if ~isfield(options, 'peak_threshold_mult')
+        options.peak_threshold_mult = 0.3;
+    end
+    if ~isfield(options, 'threshold_db')
+        options.threshold_db = -60;
+    end
 
     % Only use valid samples
-    valid = amps > -60;
+    valid = amps > options.threshold_db;
     signal = amps(valid);
 
-    if length(signal) < 10
+    if length(signal) < options.min_samples
         period = 0;
         confidence = 0;
         return;
@@ -201,10 +259,10 @@ function [period, confidence] = find_amplitude_periodicity(amps, fs_analysis)
     end
 
     % Find first significant peak after lag 0
-    peak_threshold = 0.3 * (max(acf_shifted) - min(acf_shifted));
+    peak_threshold = options.peak_threshold_mult * (max(acf_shifted) - min(acf_shifted));
 
     [peaks, locs] = findpeaks(acf_shifted, 'MinPeakHeight', peak_threshold, ...
-                                           'MinPeakDistance', 5);
+                                           'MinPeakDistance', options.min_peak_distance);
 
     if ~isempty(locs) && locs(1) > 1
         period = lags_pos(locs(1)) / fs_analysis;
@@ -216,27 +274,32 @@ function [period, confidence] = find_amplitude_periodicity(amps, fs_analysis)
 end
 
 
-function segments = segment_by_activity(times, amps, threshold, min_duration)
+function segments = segment_by_activity(times, amps, options)
     % Segment envelope into active and quiet regions
     %
-    % Args:
-    %   times: time vector (seconds)
-    %   amps: amplitude values (dBFS)
-    %   threshold: amplitude threshold for "active" (dBFS)
-    %   min_duration: minimum segment duration (seconds)
+    % Parameters:
+    %   times - time vector (seconds)
+    %   amps - amplitude values (dBFS)
+    %   options - optional struct with:
+    %     .min_duration - minimum segment duration in seconds (default 0.1)
+    %     .threshold_db - amplitude threshold for "active" in dBFS (default -40)
     %
     % Returns:
-    %   segments: array of structs with start, end_time, duration, mean_amp, max_amp
+    %   segments - array of structs with start, end_time, duration, mean_amp, max_amp
 
+    % Handle default parameters
     if nargin < 3
-        threshold = -40;
+        options = struct();
     end
-    if nargin < 4
-        min_duration = 0.1;
+    if ~isfield(options, 'min_duration')
+        options.min_duration = 0.1;
+    end
+    if ~isfield(options, 'threshold_db')
+        options.threshold_db = -40;
     end
 
     % Find active regions
-    active = amps > threshold;
+    active = amps > options.threshold_db;
 
     % Find transitions
     transitions = diff([0; active; 0]);
@@ -247,7 +310,7 @@ function segments = segment_by_activity(times, amps, threshold, min_duration)
     for i = 1:length(starts)
         if starts(i) <= length(times) && ends(i) <= length(times)
             duration = times(ends(i)) - times(starts(i));
-            if duration >= min_duration
+            if duration >= options.min_duration
                 segment.start = times(starts(i));
                 segment.end_time = times(ends(i));
                 segment.duration = duration;
@@ -263,43 +326,50 @@ end
 function analysis = analyze_partial_rhythm(times, amps, partial_idx, options)
     % Comprehensive rhythmic analysis of a partial's amplitude envelope
     %
-    % Args:
-    %   times: time vector (seconds)
-    %   amps: amplitude trajectory for this partial (dBFS)
-    %   partial_idx: which partial this is (for labeling)
-    %   options: struct with analysis parameters (optional)
-    %     .smooth_window - samples for smoothing (default 5)
+    % Parameters:
+    %   times - time vector (seconds)
+    %   amps - amplitude trajectory for this partial (dBFS)
+    %   partial_idx - which partial this is (for labeling)
+    %   options - optional struct with:
     %     .activity_threshold - dBFS threshold for activity (default -40)
+    %     .min_peak_distance - minimum samples between peaks (default 20)
     %     .min_segment_duration - minimum segment length in seconds (default 0.1)
+    %     .smooth_window - samples for smoothing (default 5)
+    %     .threshold_db - minimum dB to consider valid (default -60)
     %
     % Returns:
-    %   analysis: struct with rhythmic features
+    %   analysis - struct with rhythmic features
 
+    % Handle default parameters
     if nargin < 4
         options = struct();
-    end
-
-    % Default options
-    if ~isfield(options, 'smooth_window')
-        options.smooth_window = 5;
     end
     if ~isfield(options, 'activity_threshold')
         options.activity_threshold = -40;
     end
+    if ~isfield(options, 'min_peak_distance')
+        options.min_peak_distance = 20;
+    end
     if ~isfield(options, 'min_segment_duration')
         options.min_segment_duration = 0.1;
+    end
+    if ~isfield(options, 'smooth_window')
+        options.smooth_window = 5;
+    end
+    if ~isfield(options, 'threshold_db')
+        options.threshold_db = -60;
     end
 
     analysis.partial_idx = partial_idx;
 
     % 1. Basic statistics
-    valid = amps > -60;
+    valid = amps > options.threshold_db;
 
     if sum(valid) == 0
         % No valid data for this partial
-        analysis.mean_amplitude = -60;
-        analysis.max_amplitude = -60;
-        analysis.min_amplitude = -60;
+        analysis.mean_amplitude = options.threshold_db;
+        analysis.max_amplitude = options.threshold_db;
+        analysis.min_amplitude = options.threshold_db;
         analysis.amplitude_range = 0;
         analysis.smoothed = amps;
         analysis.num_peaks = 0;
@@ -332,12 +402,14 @@ function analysis = analyze_partial_rhythm(times, amps, partial_idx, options)
     analysis.amplitude_range = analysis.max_amplitude - analysis.min_amplitude;
 
     % 2. Smoothed envelope
-    analysis.smoothed = smooth_envelope(amps, options.smooth_window);
+    smooth_opts.window_size = options.smooth_window;
+    analysis.smoothed = smooth_envelope(amps, smooth_opts);
 
     % 3. Find peaks on smoothed data (reduces false peaks)
-    [peak_times, peak_amps] = find_amplitude_peaks(times, analysis.smoothed, ...
-                                                    analysis.mean_amplitude, ...
-                                                    20);  % Increased min distance
+    peak_opts.min_peak_height = analysis.mean_amplitude;
+    peak_opts.min_peak_distance = options.min_peak_distance;
+    peak_opts.threshold_db = options.threshold_db;
+    [peak_times, peak_amps] = find_amplitude_peaks(times, analysis.smoothed, peak_opts);
     analysis.peak_times = peak_times;
     analysis.peak_amplitudes = peak_amps;
     analysis.num_peaks = length(peak_times);
@@ -358,9 +430,9 @@ function analysis = analyze_partial_rhythm(times, amps, partial_idx, options)
     end
 
     % 5. Activity segments
-    analysis.segments = segment_by_activity(times, amps, ...
-                                            options.activity_threshold, ...
-                                            options.min_segment_duration);
+    seg_opts.threshold_db = options.activity_threshold;
+    seg_opts.min_duration = options.min_segment_duration;
+    analysis.segments = segment_by_activity(times, amps, seg_opts);
     analysis.num_segments = length(analysis.segments);
 
     % 6. Dynamics (rate of change) - use smoothed data
@@ -383,7 +455,8 @@ function analysis = analyze_partial_rhythm(times, amps, partial_idx, options)
     % 7. Periodicity analysis
     if sum(valid) > 10
         fs_analysis = 1 / mean(diff(times));
-        [period, conf] = find_amplitude_periodicity(amps, fs_analysis);
+        period_opts.threshold_db = options.threshold_db;
+        [period, conf] = find_amplitude_periodicity(amps, fs_analysis, period_opts);
         analysis.detected_period = period;
         analysis.periodicity_confidence = conf;
     else
@@ -421,21 +494,30 @@ end
 % RHYTHMIC ANALYSIS VISUALIZATION FUNCTIONS
 % ============================================================================
 
-function plot_rhythmic_analysis(times, amps, analysis, title_str, time_range)
+function plot_rhythmic_analysis(times, amps, analysis, options)
     % Visualize rhythmic analysis of a single partial
     %
-    % Args:
-    %   times: time vector (seconds)
-    %   amps: amplitude trajectory (dBFS)
-    %   analysis: analysis struct from analyze_partial_rhythm
-    %   title_str: optional title (default '')
-    %   time_range: [min, max] time range to plot (default: auto)
+    % Parameters:
+    %   times - time vector (seconds)
+    %   amps - amplitude trajectory (dBFS)
+    %   analysis - analysis struct from analyze_partial_rhythm
+    %   options - optional struct with:
+    %     .threshold_db - minimum dB to consider valid (default -60)
+    %     .time_range - [min, max] time range to plot (default [] for auto)
+    %     .title_prefix - title prefix (default '')
 
+    % Handle default parameters
     if nargin < 4
-        title_str = '';
+        options = struct();
     end
-    if nargin < 5
-        time_range = [];
+    if ~isfield(options, 'threshold_db')
+        options.threshold_db = -60;
+    end
+    if ~isfield(options, 'time_range')
+        options.time_range = [];
+    end
+    if ~isfield(options, 'title_prefix')
+        options.title_prefix = '';
     end
 
     figure;
@@ -445,7 +527,7 @@ function plot_rhythmic_analysis(times, amps, analysis, title_str, time_range)
     hold on;
 
     % Plot raw envelope
-    valid = amps > -60;
+    valid = amps > options.threshold_db;
     plot(times(valid), amps(valid), '-', 'Color', [0.7 0.7 0.7], 'LineWidth', 1);
 
     % Plot smoothed envelope
@@ -470,13 +552,13 @@ function plot_rhythmic_analysis(times, amps, analysis, title_str, time_range)
 
     hold off;
 
-    if ~isempty(time_range)
-        xlim(time_range);
+    if ~isempty(options.time_range)
+        xlim(options.time_range);
     end
 
     ylabel('Amplitude (dBFS)');
-    if ~isempty(title_str)
-        title(sprintf('%s - Partial %d Envelope', title_str, analysis.partial_idx));
+    if ~isempty(options.title_prefix)
+        title(sprintf('%s - Partial %d Envelope', options.title_prefix, analysis.partial_idx));
     else
         title(sprintf('Partial %d Envelope', analysis.partial_idx));
     end
@@ -509,8 +591,8 @@ function plot_rhythmic_analysis(times, amps, analysis, title_str, time_range)
         plot(xlim, [0 0], 'k--', 'LineWidth', 0.5);
         hold off;
 
-        if ~isempty(time_range)
-            xlim(time_range);
+        if ~isempty(options.time_range)
+            xlim(options.time_range);
         end
 
         ylabel('Rate of Change (dB/s)');
@@ -552,15 +634,20 @@ function plot_rhythmic_analysis(times, amps, analysis, title_str, time_range)
 end
 
 
-function plot_rhythmic_summary(analyses, title_str)
+function plot_rhythmic_summary(analyses, options)
     % Create summary visualization comparing all partials
     %
-    % Args:
-    %   analyses: cell array of analysis structs
-    %   title_str: optional title (default '')
+    % Parameters:
+    %   analyses - cell array of analysis structs
+    %   options - optional struct with:
+    %     .title_prefix - title prefix (default '')
 
+    % Handle default parameters
     if nargin < 2
-        title_str = '';
+        options = struct();
+    end
+    if ~isfield(options, 'title_prefix')
+        options.title_prefix = '';
     end
 
     num_partials = length(analyses);
@@ -632,9 +719,9 @@ function plot_rhythmic_summary(analyses, title_str)
     end
 
     % Overall title
-    if ~isempty(title_str)
+    if ~isempty(options.title_prefix)
         annotation('textbox', [0 0.96 1 0.04], ...
-                   'String', [title_str ' - Rhythmic Analysis Summary'], ...
+                   'String', [options.title_prefix ' - Rhythmic Analysis Summary'], ...
                    'EdgeColor', 'none', ...
                    'HorizontalAlignment', 'center', ...
                    'FontSize', 12, ...
@@ -643,15 +730,24 @@ function plot_rhythmic_summary(analyses, title_str)
 end
 
 
-function plot_rhythm_matrix(analyses, title_str)
+function plot_rhythm_matrix(analyses, options)
     % Create a heat map showing rhythmic patterns across all partials over time
     %
-    % Args:
-    %   analyses: cell array of analysis structs
-    %   title_str: optional title (default '')
+    % Parameters:
+    %   analyses - cell array of analysis structs
+    %   options - optional struct with:
+    %     .num_bins - number of time bins (default 100)
+    %     .title_prefix - title prefix (default '')
 
+    % Handle default parameters
     if nargin < 2
-        title_str = '';
+        options = struct();
+    end
+    if ~isfield(options, 'num_bins')
+        options.num_bins = 100;
+    end
+    if ~isfield(options, 'title_prefix')
+        options.title_prefix = '';
     end
 
     num_partials = length(analyses);
@@ -672,19 +768,18 @@ function plot_rhythm_matrix(analyses, title_str)
         return;
     end
 
-    % Create time bins (100 bins across duration)
-    num_bins = 100;
-    time_bins = linspace(0, max_time, num_bins);
+    % Create time bins
+    time_bins = linspace(0, max_time, options.num_bins);
     bin_width = time_bins(2) - time_bins(1);
 
     % Create activity matrix
-    activity_matrix = zeros(num_partials, num_bins);
+    activity_matrix = zeros(num_partials, options.num_bins);
 
     for p = 1:num_partials
         if ~isempty(analyses{p}.peak_times)
             % Bin the peaks
             for peak_time = analyses{p}.peak_times'
-                bin_idx = min(floor(peak_time / bin_width) + 1, num_bins);
+                bin_idx = min(floor(peak_time / bin_width) + 1, options.num_bins);
                 activity_matrix(p, bin_idx) = activity_matrix(p, bin_idx) + 1;
             end
         end
@@ -697,8 +792,8 @@ function plot_rhythm_matrix(analyses, title_str)
 
     xlabel('Time (seconds)');
     ylabel('Partial Number');
-    if ~isempty(title_str)
-        title([title_str ' - Rhythmic Activity Heat Map']);
+    if ~isempty(options.title_prefix)
+        title([options.title_prefix ' - Rhythmic Activity Heat Map']);
     else
         title('Rhythmic Activity Heat Map');
     end
@@ -708,4 +803,4 @@ function plot_rhythm_matrix(analyses, title_str)
     set(gca, 'YDir', 'normal');
 end
 
-printf('Rhythmic analysis functions loaded!\n');
+printf('Rhythmic analysis functions loaded ✓\n');
