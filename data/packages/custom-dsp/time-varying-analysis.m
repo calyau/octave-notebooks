@@ -1,14 +1,17 @@
 % time-varying-analysis.m
 % Functions for time-varying spectral analysis
 
-function [times, freqs_matrix, amps_matrix, metadata] = analyze_spectral_evolution(audio_file, window_size, hop_size, min_amplitude)
+function [times, freqs_matrix, amps_matrix, metadata] = analyze_spectral_evolution(audio_file, options)
     % Analyze time-varying spectrum across an audio file
     %
     % Parameters:
     %   audio_file - path to .wav file (string)
-    %   window_size - FFT window size (optional, default 4096)
-    %   hop_size - samples between frames (optional, default window_size/2)
-    %   min_amplitude - minimum dBFS to include partial (optional, default 15)
+    %   options - optional struct with:
+    %     .high_pass_freq - high-pass filter cutoff in Hz (default 30)
+    %     .hop_size - samples between frames (default window_size/2)
+    %     .max_partials - maximum number of partials to detect per frame (default 30)
+    %     .threshold_db - minimum dB to consider active (default: -60)
+    %     .window_size - FFT window size (default 4096)
     %
     % Returns:
     %   times - 1D array of time points in seconds (row vector)
@@ -23,13 +26,23 @@ function [times, freqs_matrix, amps_matrix, metadata] = analyze_spectral_evoluti
 
     % Handle default parameters
     if nargin < 2
-        window_size = 4096;
+        options = struct();
     end
-    if nargin < 3
-        hop_size = floor(window_size / 2);
+
+    if ~isfield(options, 'high_pass_freq')
+        options.high_pass_freq = 20;
     end
-    if nargin < 4
-        min_amplitude = -60;
+    if ~isfield(options, 'max_partials')
+        options.max_partials = 20;
+    end
+    if ~isfield(options, 'threshold_db')
+        options.threshold_db = -60;
+    end
+    if ~isfield(options, 'window_size')
+        options.window_size = 4096;
+    end
+    if ~isfield(options, 'hop_size')
+        options.hop_size = floor(options.window_size / 2);
     end
 
     % Load and prepare audio
@@ -40,26 +53,25 @@ function [times, freqs_matrix, amps_matrix, metadata] = analyze_spectral_evoluti
         y = y(:, 1);
     end
 
-    % High-pass filter at 30 Hz (preserves low fundamentals, removes DC/subsonic)
-    [b, a] = butter(4, 30/(fs/2), 'high');
+    % High-pass filter
+    [b, a] = butter(4, options.high_pass_freq/(fs/2), 'high');
     y = filter(b, a, y);
 
     % Calculate frame parameters
     num_samples = length(y);
-    num_frames = floor((num_samples - window_size) / hop_size) + 1;
+    num_frames = floor((num_samples - options.window_size) / options.hop_size) + 1;
 
     % Pre-allocate arrays
-    max_partials = 30;  % Estimate
-    freqs_matrix = zeros(num_frames, max_partials);
-    amps_matrix = zeros(num_frames, max_partials);
+    freqs_matrix = zeros(num_frames, options.max_partials);
+    amps_matrix = zeros(num_frames, options.max_partials);
     times = zeros(1, num_frames);
     partials_per_frame = zeros(1, num_frames);
 
     % Analyze each frame
     for frame_idx = 1:num_frames
         % Extract window
-        start_idx = (frame_idx - 1) * hop_size + 1;
-        end_idx = start_idx + window_size - 1;
+        start_idx = (frame_idx - 1) * options.hop_size + 1;
+        end_idx = start_idx + options.window_size - 1;
 
         if end_idx > num_samples
             break;
@@ -69,7 +81,7 @@ function [times, freqs_matrix, amps_matrix, metadata] = analyze_spectral_evoluti
         times(frame_idx) = (start_idx - 1) / fs;
 
         % Analyze this frame
-        [freqs, amps] = find_harmonics_frame(frame, fs, window_size, min_amplitude);
+        [freqs, amps] = find_harmonics_frame(frame, fs, options);
 
         num_found = length(freqs);
         partials_per_frame(frame_idx) = num_found;
@@ -97,8 +109,8 @@ function [times, freqs_matrix, amps_matrix, metadata] = analyze_spectral_evoluti
     metadata.num_frames = actual_frames;
     metadata.num_partials_per_frame = partials_per_frame;
     metadata.sample_rate = fs;
-    metadata.window_size = window_size;
-    metadata.hop_size = hop_size;
+    metadata.window_size = options.window_size;
+    metadata.hop_size = options.hop_size;
 
     % Detect fundamental using harmonic analysis
     metadata.fundamental = detect_fundamental(freqs_matrix, amps_matrix);
@@ -110,21 +122,31 @@ function [times, freqs_matrix, amps_matrix, metadata] = analyze_spectral_evoluti
 end
 
 
-function [peak_freqs, peak_amps] = find_harmonics_frame(frame, fs, window_size, min_amplitude)
-    if nargin < 4
-        min_amplitude = -60;
+function [peak_freqs, peak_amps] = find_harmonics_frame(frame, fs, options)
+    % Handle default parameters
+    if nargin < 3
+        options = struct();
+    end
+    if ~isfield(options, 'max_partials')
+        options.max_partials = 20;
+    end
+    if ~isfield(options, 'threshold_db')
+        options.threshold_db = -60;
+    end
+    if ~isfield(options, 'window_size')
+        options.window_size = 4096;
     end
 
     % Apply window
     windowed = frame .* hanning(length(frame));
 
     % Zero-pad
-    padded = [windowed; zeros(window_size - length(frame), 1)];
+    padded = [windowed; zeros(options.window_size - length(frame), 1)];
 
     % Compute FFT and magnitude in dBFS
     spectrum = fft(padded);
     magnitude = abs(spectrum(1:floor(end/2)));
-    magnitude = magnitude / (window_size / 2);  % Normalize for dBFS
+    magnitude = magnitude / (options.window_size / 2);  % Normalize for dBFS
     magnitude_db = 20 * log10(magnitude + 1e-10);
 
     freqs = (0:length(magnitude)-1)' * fs / length(spectrum);
@@ -162,8 +184,8 @@ function [peak_freqs, peak_amps] = find_harmonics_frame(frame, fs, window_size, 
     peak_amps = magnitude_db(locs);
 
     % Filter by minimum amplitude threshold
-    valid = peak_amps > min_amplitude;
-    %printf('  [DEBUG] %d peaks above %.1f dBFS threshold\n', sum(valid), min_amplitude);
+    valid = peak_amps > options.threshold_db;
+    %printf('  [DEBUG] %d peaks above %.1f dBFS threshold\n', sum(valid), options.threshold_db);
 
     peak_freqs = peak_freqs(valid);
     peak_amps = peak_amps(valid);
@@ -174,7 +196,7 @@ function [peak_freqs, peak_amps] = find_harmonics_frame(frame, fs, window_size, 
 
     % Sort by amplitude and keep top partials
     [~, sort_idx] = sort(peak_amps, 'descend');
-    max_peaks = min(20, length(peak_freqs));
+    max_peaks = min(options.max_partials, length(peak_freqs));
 
     peak_freqs = peak_freqs(sort_idx(1:max_peaks));
     peak_amps = peak_amps(sort_idx(1:max_peaks));
@@ -737,51 +759,61 @@ function spectral_analysis_report(times, freqs_matrix, amps_matrix, title_str, n
     %   times: time vector (seconds)
     %   freqs_matrix: 2D array [frames × partials] of frequencies
     %   amps_matrix: 2D array [frames × partials] of amplitudes (dBFS)
-    %   title_str: optional title prefix (default '')
-    %   num_partials: number of partials to plot in trajectories (default 10)
+    %   options - optional struct with:
+    %     .title_prefix - title prefix (default '')
+    %     .num_partials: number of partials to plot in trajectories (default all)
+    %     .threshold_db - minimum dB to consider active (default: -60)
     %
     % Example:
     %   [times, freqs, amps, meta] = analyze_spectral_evolution('audio/oboe.wav');
     %   spectral_analysis_report(times, freqs, amps, 'Oboe A4', 10);
-
+    frame_count = length(times);
     if nargin < 4
-        title_str = '';
+        options = struct();
     end
-    if nargin < 5
-        num_partials = 10;
+    if ~isfield(options, 'title_prefix')
+        options.title_prefix = '';
     end
-    min_amplitude = -60;
+    if ~isfield(options, 'num_partials')
+        options.num_partials = frame_count;
+    end
+    if options.num_partials == 'all'
+        options.num_partials = frame_count;
+    end
+    if ~isfield(options, 'threshold_db')
+        options.threshold_db = -60;
+    end
 
     printf('\nGenerating spectral analysis report...\n');
 
     % Plot 1: Partial trajectories
     printf('  - Partial trajectories\n');
-    plot_partial_trajectories(times, freqs_matrix, amps_matrix, num_partials, title_str);
+    plot_partial_trajectories(times, freqs_matrix, amps_matrix, options.num_partials, options.title_prefix);
 
     % Plot 2: Harmonic ratios
     printf('  - Harmonic ratios\n');
-    plot_harmonic_ratios(times, freqs_matrix, 6, title_str);
+    plot_harmonic_ratios(times, freqs_matrix, 6, options.title_prefix);
 
     % Plot 3: Spectral centroid
     printf('  - Spectral centroid\n');
-    plot_spectral_centroid(times, freqs_matrix, amps_matrix, title_str);
+    plot_spectral_centroid(times, freqs_matrix, amps_matrix, options.title_prefix);
 
     % Plot 4: Spectral richness
     printf('  - Spectral richness\n');
-    plot_spectral_richness(times, amps_matrix, min_amplitude, title_str);
+    plot_spectral_richness(times, amps_matrix, options.threshold_db, options.title_prefix);
 
     % Print summary statistics
     printf('\nSpectral Analysis Summary:\n');
     printf('  Duration: %.2f seconds\n', times(end) - times(1));
-    printf('  Number of frames: %d\n', length(times));
+    printf('  Number of frames: %d\n', frame_count);
     printf('  Time resolution: %.3f seconds\n', mean(diff(times)));
 
-    active_per_frame = sum(amps_matrix > min_amplitude, 2);
+    active_per_frame = sum(amps_matrix > options.threshold_db, 2);
     printf('  Active partials: %.1f (mean), %d (max)\n', ...
            mean(active_per_frame), max(active_per_frame));
 
     % Calculate mean spectral centroid
-    num_frames = length(times);
+    num_frames = frame_count;
     centroids = zeros(num_frames, 1);
     for frame = 1:num_frames
         valid = freqs_matrix(frame, :) > 0;
