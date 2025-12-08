@@ -432,7 +432,7 @@ function plot_partial_amp_trajectories(times, amps_matrix, options)
     %   times - time vector (seconds)
     %   amps_matrix - 2D array [frames × partials] of amplitudes
     %   options - optional struct with:
-    %     .amp_range - [min_amp, max_amp] to display (default: auto)
+    %     .db_range - [min_amp, max_amp] to display (default: auto)
     %     .gaps - [horizontal, vertical] gap fractions (default [0.08, 0.10])
     %     .margins - [left, right, bottom, top] fractions (default [0.08, 0.05, 0.08, 0.12])
     %     .num_partials - number of partials to plot (default length of times)
@@ -443,8 +443,8 @@ function plot_partial_amp_trajectories(times, amps_matrix, options)
     if nargin < 3
         options = struct();
     end
-    if ~isfield(options, 'amp_range')
-        options.amp_range = [];
+    if ~isfield(options, 'db_range')
+        options.db_range = [];
     end
     if ~isfield(options, 'gaps')
         options.gaps = [0.08, 0.10];
@@ -531,7 +531,7 @@ function plot_partial_amp_trajectories(times, amps_matrix, options)
             subplot('Position', [left, bottom, subplot_width, subplot_height]);
 
             plot_single_partial(times, amps_matrix, partial_idx, colors(partial_idx,:), ...
-                               options.time_range, options.amp_range);
+                               options.time_range, options.db_range);
         end
     end
 end
@@ -591,7 +591,7 @@ function plot_harmonic_ratios(times, freqs_matrix, options)
     %   times - time vector (seconds)
     %   freqs_matrix - 2D array [frames × partials] of frequencies
     %   options - optional struct with:
-    %     .max_partial - highest partial to plot (default 6)
+    %     .num_partials - highest partial to plot (default 8)
     %     .ratio_range - [min_ratio, max_ratio] to display (default: auto)
     %     .time_range - [min_time, max_time] to display (default: auto)
     %     .title_prefix - title prefix (default '')
@@ -600,8 +600,8 @@ function plot_harmonic_ratios(times, freqs_matrix, options)
     if nargin < 3
         options = struct();
     end
-    if ~isfield(options, 'max_partial')
-        options.max_partial = 6;
+    if ~isfield(options, 'num_partials')
+        options.num_partials = 8;
     end
     if ~isfield(options, 'ratio_range')
         options.ratio_range = [];
@@ -614,7 +614,7 @@ function plot_harmonic_ratios(times, freqs_matrix, options)
     end
 
     % Limit to available partials
-    max_partial = min(options.max_partial, size(freqs_matrix, 2));
+    num_partials = min(options.num_partials, size(freqs_matrix, 2));
 
     figure;
     hold on;
@@ -622,10 +622,10 @@ function plot_harmonic_ratios(times, freqs_matrix, options)
     % Calculate harmonic ratios
     fundamental_trajectory = freqs_matrix(:, 1);
 
-    colors = jet(max_partial - 1);
+    colors = jet(num_partials - 1);
 
     legend_labels = {};
-    for partial_idx = 2:max_partial
+    for partial_idx = 2:num_partials
         ratios = freqs_matrix(:, partial_idx) ./ fundamental_trajectory;
         valid = ratios > 0 & ~isnan(ratios) & ~isinf(ratios);
 
@@ -646,14 +646,14 @@ function plot_harmonic_ratios(times, freqs_matrix, options)
     if ~isempty(options.ratio_range)
         ylim(options.ratio_range);
     else
-        ylim([1.5 max_partial + 0.5]);
+        ylim([1.5 num_partials + 0.5]);
     end
 
     current_ylim = ylim;
     current_xlim = xlim;
 
     % Add reference lines for perfect harmonics (using plot instead of yline)
-    for i = 2:max_partial
+    for i = 2:num_partials
         if i >= current_ylim(1) && i <= current_ylim(2)
             plot(current_xlim, [i i], '--', 'Color', [0.5 0.5 0.5], 'LineWidth', 0.5);
         end
@@ -666,9 +666,9 @@ function plot_harmonic_ratios(times, freqs_matrix, options)
 
     % Multi-line title using newline
     if ~isempty(options.title_prefix)
-        title(sprintf('%s\nHarmonic Ratio Evolution (Inharmonicity)', options.title_prefix));
+        title([options.title_prefix ' - Harmonic Ratio Evolution']);
     else
-        title(sprintf('Harmonic Ratio Evolution\n(Inharmonicity)'));
+        title('Harmonic Ratio Evolution');
     end
 
     if ~isempty(legend_labels)

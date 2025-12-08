@@ -8,4 +8,4 @@ function ensure_dirs(filepath)
   endif
 endfunction
 
-printf('File system functions loaded!\n');
+printf('File system functions loaded ✓\n');

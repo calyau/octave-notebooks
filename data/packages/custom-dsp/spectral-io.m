@@ -125,4 +125,4 @@ function save_spectral_evolution(filename, times, freqs_matrix, amps_matrix, met
            filename, num_frames, times(1), times(end));
 end
 
-printf('Spectral I/O functions loaded!\n');
+printf('Spectral I/O functions loaded ✓\n');

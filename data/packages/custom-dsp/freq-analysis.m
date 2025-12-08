@@ -10,6 +10,10 @@ function [freqs, amps, metadata] = analyze_static_spectrum(signal, fs, options)
     %     .min_peak_distance - minimum bins between peaks (default 10)
     %     .window_size - FFT window size (default 4096)
     %
+    % Note that the dynamic_range_db parameter with the default value should be
+    % interpreted as:
+    %   "look for peaks within 42 dB of the loudest peak."
+    %
     % Returns:
     %   freqs - array of peak frequencies in Hz
     %   amps - array of peak amplitudes in dBFS

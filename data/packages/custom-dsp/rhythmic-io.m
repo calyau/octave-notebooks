@@ -323,3 +323,5 @@ function export_rhythm_json(analyses, filename, metadata)
     fclose(fid);
     printf('Rhythmic analysis exported to JSON: %s\n', filename);
 end
+
+printf('Rhythmic I/O functions loaded ✓\n');

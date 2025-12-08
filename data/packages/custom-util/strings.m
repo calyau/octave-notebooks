@@ -18,4 +18,4 @@ function result = titlecase(str)
   result = str;
 endfunction
 
-printf('String functions loaded!\n');
+printf('String functions loaded ✓\n');
