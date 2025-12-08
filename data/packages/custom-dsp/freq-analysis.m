@@ -1,54 +1,67 @@
 % Find harmonics from a spectrum
-function [freqs, amps, metadata] = analyze_static_spectrum(signal, fs, window_size)
+function [freqs, amps, metadata] = analyze_static_spectrum(signal, fs, options)
     % Analyze a single spectral snapshot
     %
-    % Args:
-    %   signal: audio signal (mono)
-    %   fs: sample rate in Hz
-    %   window_size: FFT window size (default 4096)
+    % Parameters:
+    %   signal - audio signal (mono)
+    %   fs - sample rate in Hz
+    %   options - optional struct with:
+    %     .dynamic_range_db - dB below max for peak detection (default 42)
+    %     .min_peak_distance - minimum bins between peaks (default 10)
+    %     .window_size - FFT window size (default 4096)
     %
     % Returns:
-    %   freqs: array of peak frequencies in Hz
-    %   amps: array of peak amplitudes in dBFS
-    %   metadata: struct with analysis parameters
+    %   freqs - array of peak frequencies in Hz
+    %   amps - array of peak amplitudes in dBFS
+    %   metadata - struct with analysis parameters
 
+    % Handle default parameters
     if nargin < 3
-        window_size = 4096;
+        options = struct();
+    end
+    if ~isfield(options, 'dynamic_range_db')
+        options.dynamic_range_db = 42;
+    end
+    if ~isfield(options, 'min_peak_distance')
+        options.min_peak_distance = 10;
+    end
+    if ~isfield(options, 'window_size')
+        options.window_size = 4096;
     end
 
     % Take a chunk from the middle of the file (avoid silence at start/end)
     mid_point = floor(length(signal) / 2);
-    start_idx = mid_point - floor(window_size / 2);
+    start_idx = mid_point - floor(options.window_size / 2);
     if start_idx < 1
         start_idx = 1;
     end
-    chunk_size = min(window_size, length(signal) - start_idx + 1);
+    chunk_size = min(options.window_size, length(signal) - start_idx + 1);
     chunk = signal(start_idx:start_idx + chunk_size - 1) .* hanning(chunk_size);
 
     % Zero-pad for better frequency resolution
-    padded = [chunk; zeros(window_size - chunk_size, 1)];
+    padded = [chunk; zeros(options.window_size - chunk_size, 1)];
 
     % Compute spectrum with proper dBFS scaling
     spectrum = abs(fft(padded));
-    spectrum = spectrum / (window_size / 2);  % Normalize by FFT size
-    spectrum_db = 20 * log10(spectrum(1:window_size/2) + 1e-10);
+    spectrum = spectrum / (options.window_size / 2);  % Normalize by FFT size
+    spectrum_db = 20 * log10(spectrum(1:options.window_size/2) + 1e-10);
 
     % Shift spectrum to be positive for findpeaks
     min_db = min(spectrum_db);
     spectrum_shifted = spectrum_db - min_db;
 
     % Frequency axis
-    freqs_full = (0:window_size/2-1)' * fs / window_size;
+    freqs_full = (0:options.window_size/2-1)' * fs / options.window_size;
 
     % Calculate peak threshold (handle edge cases)
-    peak_threshold = max(spectrum_shifted) - 42;
+    peak_threshold = max(spectrum_shifted) - options.dynamic_range_db;
     if peak_threshold < 0
         peak_threshold = 0;
     end
 
     % Find peaks
     [pks, locs] = findpeaks(spectrum_shifted, 'MinPeakHeight', peak_threshold, ...
-                                              'MinPeakDistance', 10);
+                                              'MinPeakDistance', options.min_peak_distance);
 
     % Return actual dB values (not shifted)
     freqs = freqs_full(locs);
@@ -61,7 +74,7 @@ function [freqs, amps, metadata] = analyze_static_spectrum(signal, fs, window_si
     % Build metadata struct
     metadata.num_partials = length(freqs);
     metadata.sample_rate = fs;
-    metadata.window_size = window_size;
+    metadata.window_size = options.window_size;
     metadata.time_stamp = 0.0;  % Single snapshot at t=0
 
     % Set fundamental automatically (first frequency)
@@ -185,67 +198,96 @@ function print_harmonics(peak_freqs, peak_amps)
     end
 end
 
-function plot_spectrum(signal, fs, window_size, title_str, freq_min, freq_max)
+function plot_spectrum(signal, fs, options)
+    % Plot frequency spectrum of a signal
+    %
+    % Parameters:
+    %   signal - audio signal (mono)
+    %   fs - sample rate in Hz
+    %   options - optional struct with:
+    %     .freq_range - [min, max] frequency range to display (default [100, 6000])
+    %     .title_prefix - title prefix (default 'Spectrum')
+    %     .window_size - FFT window size (default 8192)
+
+    % Handle default parameters
     if nargin < 3
-        window_size = 8192;
+        options = struct();
     end
-    if nargin < 4
-        title_str = 'Spectrum';
+    if ~isfield(options, 'freq_range')
+        options.freq_range = [100, 6000];
     end
-    if nargin < 5
-        freq_min = 100;
+    if ~isfield(options, 'title_prefix')
+        options.title_prefix = 'Spectrum';
     end
-    if nargin < 6
-        freq_max = 6000;
+    if ~isfield(options, 'window_size')
+        options.window_size = 8192;
     end
 
     % Take chunk from middle of the file
     mid_point = floor(length(signal) / 2);
-    start_idx = mid_point - floor(window_size / 2);
-    chunk = signal(start_idx:start_idx + window_size - 1) .* hanning(window_size);
+    start_idx = mid_point - floor(options.window_size / 2);
+    chunk = signal(start_idx:start_idx + options.window_size - 1) .* hanning(options.window_size);
 
     spectrum = abs(fft(chunk));
-    spectrum = spectrum / (window_size / 2);  % Normalize for dBFS
-    spectrum_db = 20 * log10(spectrum(1:window_size/2) + 1e-10);
-    freq_axis = (0:window_size/2-1)' * fs / window_size;
+    spectrum = spectrum / (options.window_size / 2);  % Normalize for dBFS
+    spectrum_db = 20 * log10(spectrum(1:options.window_size/2) + 1e-10);
+    freq_axis = (0:options.window_size/2-1)' * fs / options.window_size;
 
     plot(freq_axis, spectrum_db);
-    xlim([freq_min freq_max]);
+    xlim(options.freq_range);
     xlabel('Frequency (Hz)');
     ylabel('Magnitude (dBFS)');
-    title(title_str);
+    title(options.title_prefix);
     grid on;
 end
 
-function plot_spectrogram(signal, fs, title_str, freq_min, freq_max)
+function plot_spectrogram(signal, fs, options)
+    % Plot spectrogram of a signal
+    %
+    % Parameters:
+    %   signal - audio signal (mono)
+    %   fs - sample rate in Hz
+    %   options - optional struct with:
+    %     .freq_range - [min, max] frequency range to display (default [100, 6000])
+    %     .nfft - FFT size (default 2048)
+    %     .overlap - overlap samples (default 768)
+    %     .title_prefix - title prefix (default 'Spectrogram')
+    %     .window_size - window size (default 1024)
+
+    % Handle default parameters
     if nargin < 3
-        title_str = 'Spectrogram';
+        options = struct();
     end
-    if nargin < 4
-        freq_min = 100;
+    if ~isfield(options, 'freq_range')
+        options.freq_range = [100, 6000];
     end
-    if nargin < 5
-        freq_max = 6000;
+    if ~isfield(options, 'nfft')
+        options.nfft = 2048;
+    end
+    if ~isfield(options, 'overlap')
+        options.overlap = 768;
+    end
+    if ~isfield(options, 'title_prefix')
+        options.title_prefix = 'Spectrogram';
+    end
+    if ~isfield(options, 'window_size')
+        options.window_size = 1024;
     end
 
-    window = 1024;
-    overlap = 768;
-    nfft = 2048;
-
-    [S, f, t] = specgram(signal, nfft, fs, window, overlap);
+    [S, f, t] = specgram(signal, options.nfft, fs, options.window_size, options.overlap);
 
     % Normalize for dBFS
-    S_normalized = abs(S) / (nfft / 2);
+    S_normalized = abs(S) / (options.nfft / 2);
     S_db = 20 * log10(S_normalized + 1e-10);
 
     imagesc(t, f, S_db);
     axis xy;
-    ylim([freq_min freq_max]);
+    ylim(options.freq_range);
     xlabel('Time (s)');
     ylabel('Frequency (Hz)');
-    title(title_str);
+    title(options.title_prefix);
     c = colorbar;
     ylabel(c, 'Magnitude (dBFS)');
 end
 
-printf('Static frequency analysis functions loaded!\n');
+printf('Static frequency analysis functions loaded ✓\n');

@@ -7,9 +7,9 @@ function [times, freqs_matrix, amps_matrix, metadata] = analyze_spectral_evoluti
     % Parameters:
     %   audio_file - path to .wav file (string)
     %   options - optional struct with:
-    %     .high_pass_freq - high-pass filter cutoff in Hz (default 30)
+    %     .high_pass_freq - high-pass filter cutoff in Hz (default 20)
     %     .hop_size - samples between frames (default window_size/2)
-    %     .max_partials - maximum number of partials to detect per frame (default 30)
+    %     .max_partials - maximum number of partials to detect per frame (default 20)
     %     .threshold_db - minimum dB to consider active (default: -60)
     %     .window_size - FFT window size (default 4096)
     %
@@ -123,12 +123,34 @@ end
 
 
 function [peak_freqs, peak_amps] = find_harmonics_frame(frame, fs, options)
+    % Find harmonic peaks in a single audio frame
+    %
+    % Parameters:
+    %   frame - audio samples for this frame
+    %   fs - sample rate in Hz
+    %   options - optional struct with:
+    %     .dynamic_range_db - dB below max for peak detection (default 42)
+    %     .max_partials - maximum number of partials to return (default 20)
+    %     .min_peak_distance - minimum bins between peaks (default 10)
+    %     .threshold_db - minimum dB to consider active (default -60)
+    %     .window_size - FFT window size (default 4096)
+    %
+    % Returns:
+    %   peak_freqs - frequencies of detected peaks (Hz)
+    %   peak_amps - amplitudes of detected peaks (dBFS)
+
     % Handle default parameters
     if nargin < 3
         options = struct();
     end
+    if ~isfield(options, 'dynamic_range_db')
+        options.dynamic_range_db = 42;
+    end
     if ~isfield(options, 'max_partials')
         options.max_partials = 20;
+    end
+    if ~isfield(options, 'min_peak_distance')
+        options.min_peak_distance = 10;
     end
     if ~isfield(options, 'threshold_db')
         options.threshold_db = -60;
@@ -160,7 +182,7 @@ function [peak_freqs, peak_amps] = find_harmonics_frame(frame, fs, options)
     spectrum_shifted = magnitude_db - min_db;
 
     % Calculate dynamic threshold
-    peak_threshold = max(spectrum_shifted) - 42;
+    peak_threshold = max(spectrum_shifted) - options.dynamic_range_db;
     if peak_threshold < 0
         peak_threshold = 0;
     end
@@ -169,7 +191,7 @@ function [peak_freqs, peak_amps] = find_harmonics_frame(frame, fs, options)
 
     % Find peaks
     [pks, locs] = findpeaks(spectrum_shifted, 'MinPeakHeight', peak_threshold, ...
-                                              'MinPeakDistance', 10);
+                                              'MinPeakDistance', options.min_peak_distance);
 
     %printf('  [DEBUG] Found %d peaks before amplitude filtering\n', length(locs));
 
@@ -209,8 +231,22 @@ function [peak_freqs, peak_amps] = find_harmonics_frame(frame, fs, options)
 end
 
 
-function f0 = detect_fundamental(freqs_matrix, amps_matrix)
+function f0 = detect_fundamental(freqs_matrix, amps_matrix, options)
     % Detect fundamental frequency using harmonic analysis
+    %
+    % Parameters:
+    %   freqs_matrix - 2D array [frames × partials] of frequencies
+    %   amps_matrix - 2D array [frames × partials] of amplitudes (dBFS)
+    %   options - optional struct with:
+    %     .end_frame_pct - end of stable region as fraction (default 0.5)
+    %     .harmonic_tolerance - frequency tolerance as fraction (default 0.03)
+    %     .max_f0 - maximum fundamental frequency Hz (default 2000)
+    %     .min_f0 - minimum fundamental frequency Hz (default 20)
+    %     .num_harmonics - number of harmonics to check for scoring (default number of frames)
+    %     .start_frame_pct - start of stable region as fraction (default 0.1)
+    %
+    % Returns:
+    %   f0 - detected fundamental frequency in Hz (0 if not found)
     %
     % Algorithm:
     % 1. Skip first ~10% of frames (attack transient)
@@ -220,15 +256,39 @@ function f0 = detect_fundamental(freqs_matrix, amps_matrix)
     %    - Weighted by amplitude of matching peaks
     % 4. Return the f0 with highest score
 
+    % Handle default parameters
+    if nargin < 3
+        options = struct();
+    end
+    if ~isfield(options, 'end_frame_pct')
+        options.end_frame_pct = 0.5;
+    end
+    if ~isfield(options, 'harmonic_tolerance')
+        options.harmonic_tolerance = 0.03;
+    end
+    if ~isfield(options, 'max_f0')
+        options.max_f0 = 2000;
+    end
+    if ~isfield(options, 'min_f0')
+        options.min_f0 = 20;
+    end
+    if ~isfield(options, 'start_frame_pct')
+        options.start_frame_pct = 0.1;
+    end
+
     num_frames = size(freqs_matrix, 1);
     if num_frames == 0
         f0 = 0;
         return;
     end
 
+    if ~isfield(options, 'num_harmonics')
+        options.num_harmonics = num_frames;
+    end
+
     % Use frames from stable portion (skip attack, use early-mid sustain)
-    start_frame = max(1, floor(num_frames * 0.1));
-    end_frame = min(num_frames, floor(num_frames * 0.5));
+    start_frame = max(1, floor(num_frames * options.start_frame_pct));
+    end_frame = min(num_frames, floor(num_frames * options.end_frame_pct));
     if end_frame <= start_frame
         end_frame = num_frames;
     end
@@ -251,7 +311,7 @@ function f0 = detect_fundamental(freqs_matrix, amps_matrix)
     % Get unique candidate fundamentals (all peaks are potential f0s)
     % Also consider sub-harmonics (peak/2, peak/3) as candidates
     candidates = unique([all_freqs; all_freqs/2; all_freqs/3]);
-    candidates = candidates(candidates > 20 & candidates < 2000);  % Reasonable f0 range
+    candidates = candidates(candidates > options.min_f0 & candidates < options.max_f0);
 
     if isempty(candidates)
         f0 = 0;
@@ -265,10 +325,10 @@ function f0 = detect_fundamental(freqs_matrix, amps_matrix)
         f0_candidate = candidates(i);
         score = 0;
 
-        % Check harmonics 1 through 10
-        for harmonic = 1:10
+        % Check harmonics
+        for harmonic = 1:options.num_harmonics
             expected_freq = f0_candidate * harmonic;
-            tolerance = expected_freq * 0.03;  % 3% tolerance
+            tolerance = expected_freq * options.harmonic_tolerance;
 
             % Find peaks near this expected harmonic
             matches = abs(all_freqs - expected_freq) < tolerance;
@@ -293,32 +353,37 @@ end
 % VISUALIZATION FUNCTIONS FOR TIME-VARYING SPECTRAL ANALYSIS
 % ============================================================================
 
-function plot_partial_freq_trajectories(times, freqs_matrix, num_partials, title_str, time_range, freq_range)
+function plot_partial_freq_trajectories(times, freqs_matrix, options)
     % Plot frequency trajectories for individual partials
     %
-    % Args:
-    %   times: time vector (seconds)
-    %   freqs_matrix: 2D array [frames × partials] of frequencies
-    %   num_partials: number of partials to plot (default 10)
-    %   title_str: optional title prefix (default '')
-    %   time_range: [min_time, max_time] to display (default: auto)
-    %   freq_range: [min_freq, max_freq] for frequency plot (default: auto)
+    % Parameters:
+    %   times - time vector (seconds)
+    %   freqs_matrix - 2D array [frames × partials] of frequencies
+    %   options - optional struct with:
+    %     .freq_range - [min_freq, max_freq] to display (default: auto)
+    %     .num_partials - number of partials to plot (default: length of times)
+    %     .time_range - [min_time, max_time] to display (default: auto)
+    %     .title_prefix - title prefix (default '')
 
+    % Handle default parameters
     if nargin < 3
-        num_partials = 10;
+        options = struct();
     end
-    if nargin < 4
-        title_str = '';
+    if ~isfield(options, 'freq_range')
+        options.freq_range = [];
     end
-    if nargin < 5
-        time_range = [];  % Auto range
+    if ~isfield(options, 'num_partials')
+        options.num_partials = length(times);
     end
-    if nargin < 6
-        freq_range = [];  % Auto range
+    if ~isfield(options, 'time_range')
+        options.time_range = [];
+    end
+    if ~isfield(options, 'title_prefix')
+        options.title_prefix = '';
     end
 
     % Limit to available partials
-    num_partials = min(num_partials, size(freqs_matrix, 2));
+    num_partials = min(options.num_partials, size(freqs_matrix, 2));
 
     % Create color map for partials
     colors = jet(num_partials);
@@ -343,66 +408,71 @@ function plot_partial_freq_trajectories(times, freqs_matrix, num_partials, title
     hold off;
     xlabel('Time (s)');
     ylabel('Frequency (Hz)');
-    if ~isempty(title_str)
-        title([title_str ' - Partial Frequency Trajectories']);
+    if ~isempty(options.title_prefix)
+        title([options.title_prefix ' - Partial Frequency Trajectories']);
     else
         title('Partial Frequency Trajectories');
     end
     if ~isempty(legend_labels)
         legend(legend_labels, 'location', 'eastoutside');
     end
-    if ~isempty(time_range)
-        xlim(time_range);
+    if ~isempty(options.time_range)
+        xlim(options.time_range);
     end
-    if ~isempty(freq_range)
-        ylim(freq_range);
+    if ~isempty(options.freq_range)
+        ylim(options.freq_range);
     end
     grid on;
 end
 
-function plot_partial_amp_trajectories(times, amps_matrix, num_partials, title_str, time_range, amp_range, margins, gaps)
+function plot_partial_amp_trajectories(times, amps_matrix, options)
     % Plot amplitude envelopes for individual partials, 4 per figure in 2x2 grid
     %
-    % Args:
-    %   times: time vector (seconds)
-    %   amps_matrix: 2D array [frames × partials] of amplitudes
-    %   num_partials: number of partials to plot (default 10)
-    %   title_str: optional title prefix (default '')
-    %   time_range: [min_time, max_time] to display (default: auto)
-    %   amp_range: [min_amp, max_amp] for amplitude plot (default: auto)
-    %   margins: [left, right, bottom, top] (default [0.08, 0.05, 0.08, 0.12])
-    %   gaps: [horizontal, vertical] (default [0.08, 0.10])
+    % Parameters:
+    %   times - time vector (seconds)
+    %   amps_matrix - 2D array [frames × partials] of amplitudes
+    %   options - optional struct with:
+    %     .amp_range - [min_amp, max_amp] to display (default: auto)
+    %     .gaps - [horizontal, vertical] gap fractions (default [0.08, 0.10])
+    %     .margins - [left, right, bottom, top] fractions (default [0.08, 0.05, 0.08, 0.12])
+    %     .num_partials - number of partials to plot (default length of times)
+    %     .time_range - [min_time, max_time] to display (default: auto)
+    %     .title_prefix - title prefix (default '')
 
+    % Handle default parameters
     if nargin < 3
-        num_partials = 10;
+        options = struct();
     end
-    if nargin < 4
-        title_str = '';
+    if ~isfield(options, 'amp_range')
+        options.amp_range = [];
     end
-    if nargin < 5
-        time_range = [];
+    if ~isfield(options, 'gaps')
+        options.gaps = [0.08, 0.10];
     end
-    if nargin < 6
-        amp_range = [];
+    if ~isfield(options, 'margins')
+        options.margins = [0.08, 0.05, 0.08, 0.12];
     end
-    if nargin < 7
-        margins = [0.08, 0.05, 0.08, 0.12];
+    if ~isfield(options, 'num_partials')
+        options.num_partials = length(times);
     end
-    if nargin < 8
-        gaps = [0.08, 0.10];
+    if ~isfield(options, 'time_range')
+        options.time_range = [];
+    end
+    if ~isfield(options, 'title_prefix')
+        options.title_prefix = '';
     end
 
     % Unpack margins and gaps
-    left_margin = margins(1);
-    right_margin = margins(2);
-    bottom_margin = margins(3);
-    top_margin = margins(4);
+    left_margin = options.margins(1);
+    right_margin = options.margins(2);
+    bottom_margin = options.margins(3);
+    top_margin = options.margins(4);
 
-    horizontal_gap = gaps(1);
-    vertical_gap = gaps(2);
+    horizontal_gap = options.gaps(1);
+    vertical_gap = options.gaps(2);
 
     % Limit to available partials
-    num_partials = min(num_partials, size(amps_matrix, 2));
+    num_partials = min(options.num_partials, size(amps_matrix, 2));
 
     % Create color map for partials
     colors = jet(num_partials);
@@ -417,11 +487,11 @@ function plot_partial_amp_trajectories(times, amps_matrix, num_partials, title_s
         end_idx = min(start_idx + partials_per_figure - 1, num_partials);
 
         % Create main title for this figure
-        if ~isempty(title_str)
+        if ~isempty(options.title_prefix)
             if end_idx > start_idx
-                suptitle_str = sprintf('%s - Partials %d-%d', title_str, start_idx, end_idx);
+                suptitle_str = sprintf('%s - Partials %d-%d', options.title_prefix, start_idx, end_idx);
             else
-                suptitle_str = sprintf('%s - Partial %d', title_str, start_idx);
+                suptitle_str = sprintf('%s - Partial %d', options.title_prefix, start_idx);
             end
         else
             if end_idx > start_idx
@@ -461,7 +531,7 @@ function plot_partial_amp_trajectories(times, amps_matrix, num_partials, title_s
             subplot('Position', [left, bottom, subplot_width, subplot_height]);
 
             plot_single_partial(times, amps_matrix, partial_idx, colors(partial_idx,:), ...
-                               time_range, amp_range);
+                               options.time_range, options.amp_range);
         end
     end
 end
@@ -514,32 +584,37 @@ function plot_single_partial(times, amps_matrix, partial_idx, color, time_range,
     grid on;
 end
 
-function plot_harmonic_ratios(times, freqs_matrix, max_partial, title_str, time_range, ratio_range)
+function plot_harmonic_ratios(times, freqs_matrix, options)
     % Plot harmonic ratios over time to show inharmonicity
     %
-    % Args:
-    %   times: time vector (seconds)
-    %   freqs_matrix: 2D array [frames × partials] of frequencies
-    %   max_partial: highest partial to plot (default 6)
-    %   title_str: optional title prefix (default '')
-    %   time_range: [min_time, max_time] to display (default: auto)
-    %   ratio_range: [min_ratio, max_ratio] to display (default: auto)
+    % Parameters:
+    %   times - time vector (seconds)
+    %   freqs_matrix - 2D array [frames × partials] of frequencies
+    %   options - optional struct with:
+    %     .max_partial - highest partial to plot (default 6)
+    %     .ratio_range - [min_ratio, max_ratio] to display (default: auto)
+    %     .time_range - [min_time, max_time] to display (default: auto)
+    %     .title_prefix - title prefix (default '')
 
+    % Handle default parameters
     if nargin < 3
-        max_partial = 6;
+        options = struct();
     end
-    if nargin < 4
-        title_str = '';
+    if ~isfield(options, 'max_partial')
+        options.max_partial = 6;
     end
-    if nargin < 5
-        time_range = [];
+    if ~isfield(options, 'ratio_range')
+        options.ratio_range = [];
     end
-    if nargin < 6
-        ratio_range = [];
+    if ~isfield(options, 'time_range')
+        options.time_range = [];
+    end
+    if ~isfield(options, 'title_prefix')
+        options.title_prefix = '';
     end
 
     % Limit to available partials
-    max_partial = min(max_partial, size(freqs_matrix, 2));
+    max_partial = min(options.max_partial, size(freqs_matrix, 2));
 
     figure;
     hold on;
@@ -564,12 +639,12 @@ function plot_harmonic_ratios(times, freqs_matrix, max_partial, title_str, time_
     end
 
     % Set ranges
-    if ~isempty(time_range)
-        xlim(time_range);
+    if ~isempty(options.time_range)
+        xlim(options.time_range);
     end
 
-    if ~isempty(ratio_range)
-        ylim(ratio_range);
+    if ~isempty(options.ratio_range)
+        ylim(options.ratio_range);
     else
         ylim([1.5 max_partial + 0.5]);
     end
@@ -590,8 +665,8 @@ function plot_harmonic_ratios(times, freqs_matrix, max_partial, title_str, time_
     ylabel('Ratio to Fundamental');
 
     % Multi-line title using newline
-    if ~isempty(title_str)
-        title(sprintf('%s\nHarmonic Ratio Evolution (Inharmonicity)', title_str));
+    if ~isempty(options.title_prefix)
+        title(sprintf('%s\nHarmonic Ratio Evolution (Inharmonicity)', options.title_prefix));
     else
         title(sprintf('Harmonic Ratio Evolution\n(Inharmonicity)'));
     end
@@ -603,25 +678,30 @@ function plot_harmonic_ratios(times, freqs_matrix, max_partial, title_str, time_
     grid on;
 end
 
-function plot_spectral_centroid(times, freqs_matrix, amps_matrix, title_str, time_range, centroid_range)
+function plot_spectral_centroid(times, freqs_matrix, amps_matrix, options)
     % Plot spectral centroid over time (shows "brightness")
     %
-    % Args:
-    %   times: time vector (seconds)
-    %   freqs_matrix: 2D array [frames × partials] of frequencies
-    %   amps_matrix: 2D array [frames × partials] of amplitudes (dBFS)
-    %   title_str: optional title prefix (default '')
-    %   time_range: [min_time, max_time] to display (default: auto)
-    %   centroid_range: [min_centroid, max_centroid] in Hz (default: auto)
+    % Parameters:
+    %   times - time vector (seconds)
+    %   freqs_matrix - 2D array [frames × partials] of frequencies
+    %   amps_matrix - 2D array [frames × partials] of amplitudes (dBFS)
+    %   options - optional struct with:
+    %     .centroid_range - [min_centroid, max_centroid] in Hz (default: auto)
+    %     .time_range - [min_time, max_time] to display (default: auto)
+    %     .title_prefix - title prefix (default '')
 
+    % Handle default parameters
     if nargin < 4
-        title_str = '';
+        options = struct();
     end
-    if nargin < 5
-        time_range = [];
+    if ~isfield(options, 'centroid_range')
+        options.centroid_range = [];
     end
-    if nargin < 6
-        centroid_range = [];
+    if ~isfield(options, 'time_range')
+        options.time_range = [];
+    end
+    if ~isfield(options, 'title_prefix')
+        options.title_prefix = '';
     end
 
     % Calculate spectral centroid for each frame
@@ -646,16 +726,16 @@ function plot_spectral_centroid(times, freqs_matrix, amps_matrix, title_str, tim
     plot(times, centroids, 'LineWidth', 2, 'Color', [0.2 0.4 0.8]);
     xlabel('Time (s)');
     ylabel('Spectral Centroid (Hz)');
-    if ~isempty(title_str)
-        title([title_str ' - Timbral Brightness Over Time']);
+    if ~isempty(options.title_prefix)
+        title([options.title_prefix ' - Timbral Brightness Over Time']);
     else
         title('Timbral Brightness Over Time');
     end
-    if ~isempty(time_range)
-        xlim(time_range);
+    if ~isempty(options.time_range)
+        xlim(options.time_range);
     end
-    if ~isempty(centroid_range)
-        ylim(centroid_range);
+    if ~isempty(options.centroid_range)
+        ylim(options.centroid_range);
     end
     grid on;
 
@@ -666,32 +746,37 @@ function plot_spectral_centroid(times, freqs_matrix, amps_matrix, title_str, tim
 end
 
 
-function plot_spectral_richness(times, amps_matrix, thresholds, title_str, time_range, richness_range)
+function plot_spectral_richness(times, amps_matrix, options)
     % Plot number of active partials over time with multiple threshold layers
     %
-    % Args:
-    %   times: time vector (seconds)
-    %   amps_matrix: 2D array [frames × partials] of amplitudes (dBFS)
-    %   thresholds: array of dB thresholds (default [-60, -50, -40, -30, -20])
-    %   title_str: optional title prefix (default '')
-    %   time_range: [min_time, max_time] to display (default: auto)
-    %   richness_range: [min_count, max_count] of partials (default: auto)
+    % Parameters:
+    %   times - time vector (seconds)
+    %   amps_matrix - 2D array [frames × partials] of amplitudes (dBFS)
+    %   options - optional struct with:
+    %     .richness_range - [min_count, max_count] of partials (default: auto)
+    %     .thresholds - array of dB thresholds (default [-60, -50, -40, -30, -20])
+    %     .time_range - [min_time, max_time] to display (default: auto)
+    %     .title_prefix - title prefix (default '')
 
-    if nargin < 3 || isempty(thresholds)
-        thresholds = [-60, -50, -40, -30, -20];
+    % Handle default parameters
+    if nargin < 3
+        options = struct();
     end
-    if nargin < 4
-        title_str = '';
+    if ~isfield(options, 'richness_range')
+        options.richness_range = [];
     end
-    if nargin < 5
-        time_range = [];
+    if ~isfield(options, 'thresholds')
+        options.thresholds = [-60, -50, -40, -30, -20];
     end
-    if nargin < 6
-        richness_range = [];
+    if ~isfield(options, 'time_range')
+        options.time_range = [];
+    end
+    if ~isfield(options, 'title_prefix')
+        options.title_prefix = '';
     end
 
     % Ensure thresholds is a vector
-    thresholds = thresholds(:)';  % Make it a row vector
+    thresholds = options.thresholds(:)';  % Make it a row vector
 
     % Sort thresholds in ASCENDING order (lowest dB first = most partials)
     thresholds = sort(thresholds, 'ascend');
@@ -732,16 +817,16 @@ function plot_spectral_richness(times, amps_matrix, thresholds, title_str, time_
 
     xlabel('Time (s)');
     ylabel('Number of Active Partials');
-    if ~isempty(title_str)
-        title([title_str ' - Spectral Richness Over Time']);
+    if ~isempty(options.title_prefix)
+        title([options.title_prefix ' - Spectral Richness Over Time']);
     else
         title('Spectral Richness Over Time');
     end
-    if ~isempty(time_range)
-        xlim(time_range);
+    if ~isempty(options.time_range)
+        xlim(options.time_range);
     end
-    if ~isempty(richness_range)
-        ylim(richness_range);
+    if ~isempty(options.richness_range)
+        ylim(options.richness_range);
     else
         ylim([0 overall_max + 2]);
     end
@@ -752,55 +837,64 @@ function plot_spectral_richness(times, amps_matrix, thresholds, title_str, time_
     grid on;
 end
 
-function spectral_analysis_report(times, freqs_matrix, amps_matrix, title_str, num_partials)
+function spectral_analysis_report(times, freqs_matrix, amps_matrix, options)
     % Generate a comprehensive spectral analysis report with all plots
     %
-    % Args:
-    %   times: time vector (seconds)
-    %   freqs_matrix: 2D array [frames × partials] of frequencies
-    %   amps_matrix: 2D array [frames × partials] of amplitudes (dBFS)
+    % Parameters:
+    %   times - time vector (seconds)
+    %   freqs_matrix - 2D array [frames × partials] of frequencies
+    %   amps_matrix - 2D array [frames × partials] of amplitudes (dBFS)
     %   options - optional struct with:
+    %     .num_partials - number of partials to plot in trajectories (default all)
+    %     .threshold_db - minimum dB to consider active (default -60)
     %     .title_prefix - title prefix (default '')
-    %     .num_partials: number of partials to plot in trajectories (default all)
-    %     .threshold_db - minimum dB to consider active (default: -60)
     %
     % Example:
     %   [times, freqs, amps, meta] = analyze_spectral_evolution('audio/oboe.wav');
-    %   spectral_analysis_report(times, freqs, amps, 'Oboe A4', 10);
+    %   opts.title_prefix = 'Oboe A4';
+    %   opts.num_partials = 10;
+    %   spectral_analysis_report(times, freqs, amps, opts);
+
     frame_count = length(times);
+
+    % Handle default parameters
     if nargin < 4
         options = struct();
     end
-    if ~isfield(options, 'title_prefix')
-        options.title_prefix = '';
-    end
     if ~isfield(options, 'num_partials')
-        options.num_partials = frame_count;
-    end
-    if options.num_partials == 'all'
         options.num_partials = frame_count;
     end
     if ~isfield(options, 'threshold_db')
         options.threshold_db = -60;
     end
+    if ~isfield(options, 'title_prefix')
+        options.title_prefix = '';
+    end
 
     printf('\nGenerating spectral analysis report...\n');
 
-    % Plot 1: Partial trajectories
-    printf('  - Partial trajectories\n');
-    plot_partial_trajectories(times, freqs_matrix, amps_matrix, options.num_partials, options.title_prefix);
+    % Build options for sub-functions
+    plot_opts.num_partials = options.num_partials;
+    plot_opts.title_prefix = options.title_prefix;
+
+    % Plot 1: Partial frequency trajectories
+    printf('  - Partial frequency trajectories\n');
+    plot_partial_freq_trajectories(times, freqs_matrix, plot_opts);
 
     % Plot 2: Harmonic ratios
     printf('  - Harmonic ratios\n');
-    plot_harmonic_ratios(times, freqs_matrix, 6, options.title_prefix);
+    ratio_opts.title_prefix = options.title_prefix;
+    plot_harmonic_ratios(times, freqs_matrix, ratio_opts);
 
     % Plot 3: Spectral centroid
     printf('  - Spectral centroid\n');
-    plot_spectral_centroid(times, freqs_matrix, amps_matrix, options.title_prefix);
+    centroid_opts.title_prefix = options.title_prefix;
+    plot_spectral_centroid(times, freqs_matrix, amps_matrix, centroid_opts);
 
     % Plot 4: Spectral richness
     printf('  - Spectral richness\n');
-    plot_spectral_richness(times, amps_matrix, options.threshold_db, options.title_prefix);
+    richness_opts.title_prefix = options.title_prefix;
+    plot_spectral_richness(times, amps_matrix, richness_opts);
 
     % Print summary statistics
     printf('\nSpectral Analysis Summary:\n');
