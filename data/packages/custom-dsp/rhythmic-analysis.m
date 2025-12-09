@@ -322,7 +322,6 @@ function segments = segment_by_activity(times, amps, options)
     end
 end
 
-
 function analysis = analyze_partial_rhythm(times, amps, partial_idx, options)
     % Comprehensive rhythmic analysis of a partial's amplitude envelope
     %
@@ -494,36 +493,47 @@ end
 % RHYTHMIC ANALYSIS VISUALIZATION FUNCTIONS
 % ============================================================================
 
-function plot_smoothing_comparison(times, amps, partial_idx, window_sizes, title_str, time_range, amp_range)
+function plot_smoothing_comparison(times, amps, partial_idx, options)
     % Plot amplitude envelope with different smoothing window sizes for comparison
     %
     % This function visualizes the effect of different smoothing window sizes
     % on a partial's amplitude trajectory, helping to choose the optimal
     % smoothing parameter for analysis.
     %
-    % Args:
-    %   times: time vector (seconds)
-    %   amps: amplitude trajectory for this partial (dBFS)
-    %   partial_idx: which partial this is (for labeling)
-    %   window_sizes: array of window sizes to compare (default [3, 5, 10, 20])
-    %   title_str: optional title prefix (default '')
-    %   time_range: [min, max] time range to plot (default: auto)
-    %   amp_range: [min_amp, max_amp] for amplitude plot (default: auto)
+    % Parameters:
+    %   times - time vector (seconds)
+    %   amps - amplitude trajectory for this partial (dBFS)
+    %   partial_idx - which partial this is (for labeling)
+    %   options - optional struct with:
+    %     .amp_range - [min_amp, max_amp] for amplitude plot (default: auto)
+    %     .threshold_db - minimum dB to consider valid (default -60)
+    %     .time_range - [min, max] time range to plot (default: auto)
+    %     .title_prefix - title prefix (default '')
+    %     .window_sizes - array of window sizes to compare (default [3, 5, 10, 20])
     %
     % Example:
-    %   plot_smoothing_comparison(times, amps(:,1), 1, [3, 5, 10, 20], 'Clarinet');
+    %   opts.window_sizes = [3, 5, 10, 20];
+    %   opts.title_prefix = 'Clarinet';
+    %   plot_smoothing_comparison(times, amps(:,1), 1, opts);
 
-    if nargin < 4 || isempty(window_sizes)
-        window_sizes = [3, 5, 10, 20];
+    % Handle default parameters
+    if nargin < 4
+        options = struct();
     end
-    if nargin < 5
-        title_str = '';
+    if ~isfield(options, 'amp_range')
+        options.amp_range = [];
     end
-    if nargin < 6
-        time_range = [];
+    if ~isfield(options, 'threshold_db')
+        options.threshold_db = -60;
     end
-    if nargin < 7
-        amp_range = [];
+    if ~isfield(options, 'time_range')
+        options.time_range = [];
+    end
+    if ~isfield(options, 'title_prefix')
+        options.title_prefix = '';
+    end
+    if ~isfield(options, 'window_sizes')
+        options.window_sizes = [3, 5, 10, 20];
     end
 
     % Ensure amps is a column vector
@@ -531,7 +541,7 @@ function plot_smoothing_comparison(times, amps, partial_idx, window_sizes, title
     times = times(:);
 
     % Filter valid data
-    valid = (amps > -60) & (~isnan(amps));
+    valid = (amps > options.threshold_db) & (~isnan(amps));
 
     if sum(valid) < 2
         error('Insufficient valid data for smoothing comparison');
@@ -545,7 +555,7 @@ function plot_smoothing_comparison(times, amps, partial_idx, window_sizes, title
     valid_amps = valid_amps(:);
 
     % Calculate number of subplots needed
-    num_windows = length(window_sizes);
+    num_windows = length(options.window_sizes);
 
     % Create figure with subplots in 2-column grid
     num_rows = ceil(num_windows / 2);
@@ -556,11 +566,10 @@ function plot_smoothing_comparison(times, amps, partial_idx, window_sizes, title
     color_smoothed = [0.2 0.4 0.8];
 
     for i = 1:num_windows
-        window_size = window_sizes(i);
-        window_scalar = double(window_size);
+        window_size = options.window_sizes(i);
 
         % Apply smoothing with options struct
-        smooth_opts.sample_window = window_scalar;
+        smooth_opts.sample_window = window_size;
         smoothed_amps = smooth_envelope(valid_amps, smooth_opts);
 
         % Create subplot
@@ -576,11 +585,11 @@ function plot_smoothing_comparison(times, amps, partial_idx, window_sizes, title
         hold off;
 
         % Set ranges
-        if ~isempty(time_range)
-            xlim(time_range);
+        if ~isempty(options.time_range)
+            xlim(options.time_range);
         end
-        if ~isempty(amp_range)
-            ylim(amp_range);
+        if ~isempty(options.amp_range)
+            ylim(options.amp_range);
         end
 
         xlabel('Time (s)');
@@ -591,9 +600,9 @@ function plot_smoothing_comparison(times, amps, partial_idx, window_sizes, title
     end
 
     % Overall title
-    if ~isempty(title_str)
+    if ~isempty(options.title_prefix)
         suptitle_str = sprintf('%s - Partial %d: Smoothing Window Comparison', ...
-                              title_str, partial_idx);
+                              options.title_prefix, partial_idx);
     else
         suptitle_str = sprintf('Partial %d: Smoothing Window Comparison', partial_idx);
     end
